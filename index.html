@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simulador de Caminhão</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="game-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">World Truck</p>
+          <h1>Simulador de Caminhão</h1>
+        </div>
+        <div class="hud">
+          <span>Pontos: <strong id="score">0</strong></span>
+          <span>Velocidade: <strong id="speed">0 km/h</strong></span>
+        </div>
+      </header>
+
+      <div class="canvas-wrap">
+        <canvas id="gameCanvas" width="900" height="600" aria-label="Jogo de caminhão"></canvas>
+        <div id="overlay" class="overlay visible">
+          <div class="panel">
+            <h2 id="statusTitle">Prepare o caminhão</h2>
+            <p id="statusText">Use A/D ou as setas para desviar dos veículos e manter a estrada segura.</p>
+            <button id="startButton" type="button">Iniciar corrida</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
