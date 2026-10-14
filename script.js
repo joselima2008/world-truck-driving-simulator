@@ -1,364 +1,342 @@
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
+(function () {
+  var W = 400, H = 700;
+  var ROAD_L = 50, ROAD_W = 300, LANES = 3, LANE_W = ROAD_W / LANES;
+  var LANE_SPEED = [190, 160, 130];
+  var cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var wrap = document.getElementById('wrap');
+  var stage = document.getElementById('stage');
+  var ovStart = document.getElementById('ovStart');
+  var ovOver = document.getElementById('ovOver');
+  var hScore = document.getElementById('hScore');
+  var hSpeed = document.getElementById('hSpeed');
+  var hPassed = document.getElementById('hPassed');
+  var hBest = document.getElementById('hBest');
 
-const scoreEl = document.getElementById('score');
-const speedEl = document.getElementById('speed');
-const overlay = document.getElementById('overlay');
-const startButton = document.getElementById('startButton');
-const statusTitle = document.getElementById('statusTitle');
-const statusText = document.getElementById('statusText');
+  var best = 0;
+  try { best = parseInt(localStorage.getItem('truck-sim-best') || '0', 10) || 0; } catch (e) {}
+  hBest.textContent = best;
 
-const road = {
-  x: 225,
-  width: 450,
-  laneCount: 3,
-  laneWidth: 150,
-  scroll: 0,
-};
+  function fit() {
+    var r = wrap.getBoundingClientRect();
+    var availW = Math.max(160, r.width - 4), availH = Math.max(280, r.height - 4);
+    var s = Math.min(availW / W, availH / H);
+    var w = Math.floor(W * s), h = Math.floor(H * s);
+    stage.style.width = w + 'px';
+    stage.style.height = h + 'px';
+    var d = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = Math.round(w * d);
+    cv.height = Math.round(h * d);
+    ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+  }
+  window.addEventListener('resize', fit);
+  fit();
 
-const state = {
-  running: false,
-  score: 0,
-  speed: 260,
-  lastTime: 0,
-  spawnTimer: 0.8,
-  distance: 0,
-};
+  /* ---------- estado ---------- */
+  var state = 'ready'; // ready | play | crash | over
+  var player, trucks, scenery, particles;
+  var t, speed, scroll, spawnTimer, treeAcc, passed, crashTimer, shake;
+  var COLORS = ['#3b82c4', '#d9a441', '#5fa36b', '#8e6bbf', '#c9ced4', '#b8483f', '#4fb0a8'];
 
-const player = {
-  x: canvas.width / 2,
-  y: canvas.height - 135,
-  width: 78,
-  height: 120,
-  baseSpeed: 340,
-};
-
-const keys = {
-  left: false,
-  right: false,
-};
-
-const obstacles = [];
-
-function resetGame() {
-  state.running = true;
-  state.score = 0;
-  state.speed = 260;
-  state.distance = 0;
-  state.spawnTimer = 0.6;
-  player.x = canvas.width / 2;
-  road.scroll = 0;
-  obstacles.length = 0;
-  overlay.classList.remove('visible');
-}
-
-function endGame() {
-  state.running = false;
-  statusTitle.textContent = 'Acidente!';
-  statusText.textContent = `Você fez ${Math.floor(state.score)} pontos. Pressione o botão para tentar de novo.`;
-  overlay.classList.add('visible');
-}
-
-function spawnObstacle() {
-  const lane = Math.floor(Math.random() * road.laneCount);
-  const laneCenter = road.x + (lane + 0.5) * road.laneWidth;
-  const truck = {
-    x: laneCenter,
-    y: -140,
-    width: 72,
-    height: 118,
-    speed: 100 + Math.random() * 110,
-    passed: false,
-    color: Math.random() > 0.5 ? '#f94144' : '#4cc9f0',
-  };
-  obstacles.push(truck);
-}
-
-function update(dt) {
-  if (!state.running) {
-    return;
+  function reset() {
+    player = { x: ROAD_L + ROAD_W / 2, y: H - 130, w: 40, h: 96, vx: 0 };
+    trucks = []; scenery = []; particles = [];
+    t = 0; speed = 300; scroll = 0; spawnTimer = 0.4; treeAcc = 0;
+    passed = 0; crashTimer = 0; shake = 0;
+    for (var y = 0; y < H; y += 70) addTree(y);
   }
 
-  state.speed = Math.min(620, state.speed + dt * 10);
-  state.distance += dt * state.speed * 0.35;
-  state.score += dt * 12;
-
-  if (keys.left) {
-    player.x -= player.baseSpeed * dt;
+  function addTree(y) {
+    var left = Math.random() < 0.5;
+    scenery.push({
+      x: left ? 8 + Math.random() * 30 : W - 8 - Math.random() * 30,
+      y: y, r: 9 + Math.random() * 9, tone: Math.random()
+    });
   }
 
-  if (keys.right) {
-    player.x += player.baseSpeed * dt;
-  }
-
-  player.x = Math.max(road.x + 36, Math.min(player.x, road.x + road.width - 36));
-
-  road.scroll += state.speed * dt;
-  state.spawnTimer -= dt;
-
-  if (state.spawnTimer <= 0) {
-    spawnObstacle();
-    state.spawnTimer = Math.max(0.7, 1.6 - state.speed / 500);
-  }
-
-  for (let i = obstacles.length - 1; i >= 0; i -= 1) {
-    const obstacle = obstacles[i];
-    obstacle.y += (state.speed + obstacle.speed) * dt;
-
-    if (!obstacle.passed && obstacle.y > player.y + player.height + 20) {
-      obstacle.passed = true;
-      state.score += 15;
-    }
-
-    if (obstacle.y > canvas.height + 180) {
-      obstacles.splice(i, 1);
-      continue;
-    }
-
-    if (rectsIntersect(player.x - player.width / 2, player.y - player.height / 2, player.width, player.height, obstacle.x - obstacle.width / 2, obstacle.y - obstacle.height / 2, obstacle.width, obstacle.height)) {
-      endGame();
-      break;
+  /* ---------- entrada ---------- */
+  var keys = { left: false, right: false };
+  var touchDir = 0;
+  function setKey(e, down) {
+    var k = e.key;
+    if (k === 'ArrowLeft' || k === 'a' || k === 'A') { keys.left = down; e.preventDefault(); }
+    else if (k === 'ArrowRight' || k === 'd' || k === 'D') { keys.right = down; e.preventDefault(); }
+    else if (down && (k === ' ' || k === 'Enter')) {
+      e.preventDefault();
+      if (state === 'ready' || state === 'over') start();
     }
   }
-
-  scoreEl.textContent = Math.floor(state.score).toString();
-  speedEl.textContent = `${Math.floor(state.speed * 0.9)} km/h`;
-}
-
-function rectsIntersect(ax, ay, aw, ah, bx, by, bw, bh) {
-  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
-}
-
-function drawCloud(x, y, scale) {
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-  ctx.beginPath();
-  ctx.arc(x, y, 18 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 20 * scale, y - 8 * scale, 16 * scale, 0, Math.PI * 2);
-  ctx.arc(x - 18 * scale, y - 6 * scale, 15 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 8 * scale, y + 12 * scale, 15 * scale, 0, Math.PI * 2);
-  ctx.arc(x - 8 * scale, y + 10 * scale, 16 * scale, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawMountainRange(color, baseOffset, peakHeight, opacity) {
-  ctx.beginPath();
-  ctx.moveTo(0, canvas.height);
-
-  for (let i = 0; i <= 10; i += 1) {
-    const x = (i / 10) * canvas.width;
-    const sinValue = Math.sin((i + baseOffset) * 0.9);
-    const height = peakHeight + sinValue * 34;
-    ctx.lineTo(x, canvas.height - height);
+  window.addEventListener('keydown', function (e) { setKey(e, true); });
+  window.addEventListener('keyup', function (e) { setKey(e, false); });
+  function pointerDir(e) {
+    var r = stage.getBoundingClientRect();
+    touchDir = (e.clientX - r.left) < r.width / 2 ? -1 : 1;
   }
-
-  ctx.lineTo(canvas.width, canvas.height);
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.globalAlpha = opacity;
-  ctx.fill();
-  ctx.globalAlpha = 1;
-}
-
-function drawSky() {
-  const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  skyGradient.addColorStop(0, '#76c3ff');
-  skyGradient.addColorStop(0.28, '#bfe5ff');
-  skyGradient.addColorStop(0.55, '#dfeefc');
-  skyGradient.addColorStop(1, '#edf7ff');
-  ctx.fillStyle = skyGradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  const sunX = canvas.width * 0.78;
-  const sunY = 104;
-  ctx.beginPath();
-  ctx.fillStyle = 'rgba(255, 206, 104, 0.3)';
-  ctx.arc(sunX, sunY, 68, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.fillStyle = '#ffd166';
-  ctx.arc(sunX, sunY, 26, 0, Math.PI * 2);
-  ctx.fill();
-
-  drawMountainRange('#8ba7ba', 0.8, 110, 0.9);
-  drawMountainRange('#6b8192', 1.9, 150, 0.75);
-
-  for (let i = 0; i < 7; i += 1) {
-    drawCloud(80 + i * 120 + ((state.distance * 0.15) % 120), 55 + (i % 3) * 18, 1 + (i % 2) * 0.25);
-  }
-}
-
-function drawGrass() {
-  const grassGradient = ctx.createLinearGradient(0, 120, 0, canvas.height);
-  grassGradient.addColorStop(0, '#2aa85a');
-  grassGradient.addColorStop(0.22, '#1c7f47');
-  grassGradient.addColorStop(1, '#0d5c31');
-  ctx.fillStyle = grassGradient;
-  ctx.fillRect(0, 120, canvas.width, canvas.height - 120);
-
-  ctx.fillStyle = '#f0f8d9';
-  for (let i = 0; i < 140; i += 1) {
-    const x = ((i * 54 + road.scroll * 0.36) % (canvas.width + 70)) - 30;
-    const y = 134 + (i % 8) * 34;
-    ctx.fillRect(x, y, 7, 18);
-  }
-
-  for (let i = 0; i < 20; i += 1) {
-    const x = ((i * 96 - road.scroll * 0.2) % (canvas.width + 120)) - 50;
-    const y = 135 + (i % 5) * 26;
-    ctx.fillStyle = '#2b8b4a';
-    ctx.fillRect(x, y + 12, 8, 16);
-    ctx.fillStyle = '#4cba67';
-    ctx.beginPath();
-    ctx.arc(x + 4, y, 12, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-function drawRoad() {
-  ctx.fillStyle = '#2d343b';
-  ctx.fillRect(road.x, 120, road.width, canvas.height - 120);
-
-  ctx.fillStyle = '#59626c';
-  ctx.fillRect(road.x - 18, 120, 18, canvas.height - 120);
-  ctx.fillRect(road.x + road.width, 120, 18, canvas.height - 120);
-
-  ctx.fillStyle = '#d7dde5';
-  for (let i = 0; i < 26; i += 1) {
-    const y = ((i * 70 + road.scroll) % (canvas.height + 120)) - 60;
-    ctx.fillRect(road.x - 8, y, 6, 40);
-    ctx.fillRect(road.x + road.width + 2, y, 6, 40);
-  }
-
-  ctx.strokeStyle = '#f4f7fa';
-  ctx.lineWidth = 5;
-  ctx.setLineDash([28, 22]);
-  ctx.beginPath();
-  ctx.moveTo(road.x + road.laneWidth, 120);
-  ctx.lineTo(road.x + road.laneWidth, canvas.height);
-  ctx.moveTo(road.x + road.laneWidth * 2, 120);
-  ctx.lineTo(road.x + road.laneWidth * 2, canvas.height);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  ctx.fillStyle = '#dfe6ec';
-  for (let i = 0; i < 20; i += 1) {
-    const y = ((i * 74 + road.scroll * 1.1) % (canvas.height + 150)) - 60;
-    ctx.fillRect(road.x + road.width / 2 - 3, y, 6, 36);
-  }
-}
-
-function drawTruck(x, y, width, height, color) {
-  ctx.save();
-  ctx.translate(x, y);
-
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
-  ctx.beginPath();
-  ctx.ellipse(0, height * 0.46, width * 0.36, height * 0.12, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = color;
-  ctx.fillRect(-width / 2, -height / 2, width, height * 0.72);
-
-  ctx.fillStyle = '#0f172a';
-  ctx.fillRect(-width * 0.18, -height * 0.18, width * 0.36, height * 0.18);
-
-  ctx.fillStyle = '#f8d9a0';
-  ctx.fillRect(-width * 0.18, -height * 0.28, width * 0.36, height * 0.22);
-
-  ctx.fillStyle = '#9fd7ff';
-  ctx.fillRect(-width * 0.15, -height * 0.24, width * 0.28, height * 0.12);
-
-  ctx.fillStyle = '#4a362a';
-  ctx.fillRect(-width * 0.26, -height * 0.42, width * 0.12, height * 0.16);
-  ctx.fillRect(width * 0.14, -height * 0.42, width * 0.12, height * 0.16);
-
-  ctx.fillStyle = '#f9f9f9';
-  ctx.fillRect(-width * 0.14, -height * 0.38, width * 0.08, height * 0.08);
-  ctx.fillRect(width * 0.06, -height * 0.38, width * 0.08, height * 0.08);
-
-  ctx.fillStyle = '#ffd166';
-  ctx.fillRect(-width * 0.12, -height * 0.5, width * 0.06, height * 0.08);
-  ctx.fillRect(width * 0.06, -height * 0.5, width * 0.06, height * 0.08);
-
-  ctx.fillStyle = '#14191f';
-  const wheelOffset = width * 0.22;
-  const wheelY = height * 0.2;
-  const wheelRadius = width * 0.12;
-  for (const wheelX of [-wheelOffset, wheelOffset]) {
-    ctx.fillRect(wheelX - wheelRadius * 0.6, wheelY - wheelRadius, wheelRadius * 1.2, wheelRadius * 2);
-    ctx.fillStyle = '#d9dfe7';
-    ctx.fillRect(wheelX - wheelRadius * 0.22, wheelY - wheelRadius * 0.62, wheelRadius * 0.44, wheelRadius * 1.24);
-    ctx.fillStyle = '#14191f';
-  }
-
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.26)';
-  ctx.fillRect(-width * 0.22, -height * 0.06, width * 0.44, height * 0.1);
-
-  ctx.restore();
-}
-
-function drawPlayer() {
-  drawTruck(player.x, player.y, player.width, player.height, '#f9b233');
-}
-
-function drawObstacles() {
-  obstacles.forEach((obstacle) => {
-    drawTruck(obstacle.x, obstacle.y, obstacle.width, obstacle.height, obstacle.color);
+  stage.addEventListener('pointerdown', function (e) {
+    if (e.target.tagName === 'BUTTON') return;
+    pointerDir(e);
   });
-}
+  stage.addEventListener('pointermove', function (e) { if (touchDir !== 0) pointerDir(e); });
+  window.addEventListener('pointerup', function () { touchDir = 0; });
+  window.addEventListener('pointercancel', function () { touchDir = 0; });
+  window.addEventListener('blur', function () { keys.left = keys.right = false; touchDir = 0; });
+  document.getElementById('btnStart').addEventListener('click', start);
+  document.getElementById('btnRestart').addEventListener('click', start);
 
-function draw() {
-  drawSky();
-  drawGrass();
-  drawRoad();
-  drawObstacles();
-  drawPlayer();
-}
-
-function loop(timestamp) {
-  const dt = Math.min((timestamp - state.lastTime) / 1000 || 0.016, 0.033);
-  state.lastTime = timestamp;
-
-  update(dt);
-  draw();
-
-  requestAnimationFrame(loop);
-}
-
-window.addEventListener('keydown', (event) => {
-  const key = event.key.toLowerCase();
-
-  if (key === 'a' || key === 'arrowleft') {
-    keys.left = true;
+  function start() {
+    reset();
+    state = 'play';
+    ovStart.hidden = true;
+    ovOver.hidden = true;
   }
 
-  if (key === 'd' || key === 'arrowright') {
-    keys.right = true;
+  /* ---------- lógica ---------- */
+  function laneX(l) { return ROAD_L + LANE_W * (l + 0.5); }
+
+  function trySpawn() {
+    var sy = -140;
+    for (var tries = 0; tries < 8; tries++) {
+      var lane = Math.floor(Math.random() * LANES);
+      var x = laneX(lane) + (Math.random() - 0.5) * 20;
+      var blocked = false, others = {};
+      for (var i = 0; i < trucks.length; i++) {
+        var o = trucks[i];
+        if (o.lane === lane && o.y < 330) { blocked = true; break; }
+        if (o.lane !== lane && Math.abs(o.y - sy) < 230) others[o.lane] = true;
+      }
+      if (blocked) continue;
+      if (Object.keys(others).length >= 2) continue;
+      var h = 90 + Math.floor(Math.random() * 45);
+      trucks.push({
+        x: x, y: sy, w: 40, h: h, lane: lane, v: LANE_SPEED[lane],
+        color: COLORS[Math.floor(Math.random() * COLORS.length)], passed: false
+      });
+      return;
+    }
   }
 
-  if (event.code === 'Space' && !state.running) {
-    resetGame();
+  function steer(dt) {
+    var dir = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+    if (touchDir !== 0) dir = touchDir;
+    var target = dir * 290;
+    player.vx += (target - player.vx) * Math.min(1, dt * 10);
+    player.x += player.vx * dt;
+    var minX = ROAD_L + 24, maxX = ROAD_L + ROAD_W - 24;
+    if (player.x < minX) { player.x = minX; player.vx = 0; }
+    if (player.x > maxX) { player.x = maxX; player.vx = 0; }
   }
-});
 
-window.addEventListener('keyup', (event) => {
-  const key = event.key.toLowerCase();
-
-  if (key === 'a' || key === 'arrowleft') {
-    keys.left = false;
+  function crash(other) {
+    state = 'crash';
+    crashTimer = 0.9;
+    shake = 0.5;
+    var px = (player.x + other.x) / 2, py = (player.y + other.y) / 2;
+    for (var i = 0; i < 28; i++) {
+      var a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 260;
+      particles.push({ x: px, y: py, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.5 + Math.random() * 0.5, c: Math.random() < 0.5 ? '#f5c842' : '#ff5a36' });
+    }
+    var score = Math.floor(t * 10);
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem('truck-sim-best', String(best)); } catch (e) {}
+      hBest.textContent = best;
+    }
   }
 
-  if (key === 'd' || key === 'arrowright') {
-    keys.right = false;
+  function showOver() {
+    state = 'over';
+    var score = Math.floor(t * 10);
+    document.getElementById('fScore').textContent = score;
+    var secs = Math.floor(t);
+    document.getElementById('fInfo').textContent =
+      secs + ' s na pista, ' + passed + (passed === 1 ? ' ultrapassagem. ' : ' ultrapassagens. ') +
+      (score >= best && score > 0 ? 'Novo recorde!' : 'Recorde: ' + best + '.');
+    ovOver.hidden = false;
   }
-});
 
-startButton.addEventListener('click', () => {
-  resetGame();
-});
+  function update(dt) {
+    var i;
+    if (state === 'play') {
+      t += dt;
+      speed = 300 + Math.min(t * 5, 300);
+      steer(dt);
+      scroll += speed * dt;
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        trySpawn();
+        var gap = Math.max(190, 330 - t * 2.2);
+        var rel = speed - 160;
+        spawnTimer = (gap / rel) * (0.75 + Math.random() * 0.5);
+      }
+      for (i = trucks.length - 1; i >= 0; i--) {
+        var tr = trucks[i];
+        tr.y += (speed - tr.v) * dt;
+        if (!tr.passed && tr.y - tr.h / 2 > player.y + player.h / 2) { tr.passed = true; passed++; }
+        if (tr.y - tr.h / 2 > H + 40) trucks.splice(i, 1);
+      }
+      for (i = 0; i < trucks.length; i++) {
+        var o = trucks[i];
+        var dx = Math.abs(player.x - o.x), dy = Math.abs(player.y - o.y);
+        if (dx < (player.w - 8) / 2 + (o.w - 4) / 2 && dy < (player.h - 12) / 2 + (o.h - 6) / 2) { crash(o); break; }
+      }
+    } else if (state === 'ready') {
+      speed = 220;
+      scroll += speed * dt;
+    } else if (state === 'crash') {
+      crashTimer -= dt;
+      if (crashTimer <= 0) showOver();
+    }
+    if (state === 'play' || state === 'ready') {
+      for (i = scenery.length - 1; i >= 0; i--) {
+        scenery[i].y += speed * dt;
+        if (scenery[i].y > H + 40) scenery.splice(i, 1);
+      }
+      treeAcc += speed * dt;
+      if (treeAcc > 80) { treeAcc = 0; addTree(-30); }
+    }
+    for (i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    if (shake > 0) shake = Math.max(0, shake - dt);
 
-scoreEl.textContent = '0';
-speedEl.textContent = '0 km/h';
-statusTitle.textContent = 'Prepare o caminhão';
-statusText.textContent = 'Use A/D ou as setas para desviar dos veículos e manter a estrada segura.';
-requestAnimationFrame(loop);
+    hScore.textContent = Math.floor(t * 10);
+    hSpeed.textContent = state === 'play' ? Math.round(speed * 0.3) : (state === 'ready' ? 0 : hSpeed.textContent);
+    hPassed.textContent = passed;
+  }
+
+  /* ---------- desenho ---------- */
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+    else ctx.rect(x, y, w, h);
+  }
+
+  function drawTruck(x, y, w, h, color, isPlayer, tilt) {
+    ctx.save();
+    ctx.translate(x, y);
+    if (tilt) ctx.rotate(tilt);
+    var x0 = -w / 2, y0 = -h / 2;
+    var cabH = Math.min(30, h * 0.27);
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    rr(x0 + 4, y0 + 6, w, h, 6); ctx.fill();
+    // rodas
+    ctx.fillStyle = '#0c0e10';
+    var wy = [y0 + 6, y0 + h * 0.7, y0 + h * 0.7 + 17];
+    for (var i = 0; i < wy.length; i++) {
+      ctx.fillRect(x0 - 3, wy[i], 5, 15);
+      ctx.fillRect(x0 + w - 2, wy[i], 5, 15);
+    }
+    // carreta
+    ctx.fillStyle = color;
+    rr(x0, y0 + cabH + 4, w, h - cabH - 4, 4); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(x0 + 4, y0 + cabH + 8, w - 8, h - cabH - 12);
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+    ctx.lineWidth = 1;
+    for (var ry = y0 + cabH + 22; ry < y0 + h - 6; ry += 16) {
+      ctx.beginPath(); ctx.moveTo(x0 + 3, ry); ctx.lineTo(x0 + w - 3, ry); ctx.stroke();
+    }
+    // engate
+    ctx.fillStyle = '#16191c';
+    ctx.fillRect(-4, y0 + cabH - 1, 8, 7);
+    // cabine
+    ctx.fillStyle = color;
+    rr(x0 + 1, y0, w - 2, cabH, 6); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    rr(x0 + 1, y0, w - 2, cabH, 6); ctx.fill();
+    ctx.fillStyle = '#0f2233';
+    rr(x0 + 6, y0 + 4, w - 12, 9, 2); ctx.fill();
+    ctx.fillStyle = 'rgba(160,210,255,0.35)';
+    ctx.fillRect(x0 + 8, y0 + 5, w - 16, 2);
+    // luzes
+    ctx.fillStyle = '#b3261e';
+    ctx.fillRect(x0 + 2, y0 + h - 3, 7, 3);
+    ctx.fillRect(x0 + w - 9, y0 + h - 3, 7, 3);
+    if (isPlayer) {
+      ctx.fillStyle = '#fff3b0';
+      ctx.fillRect(x0 + 3, y0 - 1, 7, 3);
+      ctx.fillRect(x0 + w - 10, y0 - 1, 7, 3);
+    }
+    ctx.restore();
+  }
+
+  function drawScene() {
+    // grama com faixas
+    var stripe = 80, off = scroll % (stripe * 2);
+    ctx.fillStyle = '#3d7a38';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#448540';
+    for (var y = -stripe * 2 + off; y < H; y += stripe * 2) {
+      ctx.fillRect(0, y, W, stripe);
+    }
+    // acostamento e asfalto
+    ctx.fillStyle = '#6b6f73';
+    ctx.fillRect(ROAD_L - 6, 0, ROAD_W + 12, H);
+    ctx.fillStyle = '#2b2f33';
+    ctx.fillRect(ROAD_L, 0, ROAD_W, H);
+    ctx.fillStyle = '#31363a';
+    for (var y2 = -stripe * 2 + off; y2 < H; y2 += stripe * 2) {
+      ctx.fillRect(ROAD_L, y2 + stripe, ROAD_W, stripe);
+    }
+    // bordas
+    ctx.fillStyle = '#e9edf0';
+    ctx.fillRect(ROAD_L + 3, 0, 3, H);
+    ctx.fillRect(ROAD_L + ROAD_W - 6, 0, 3, H);
+    // faixas tracejadas
+    ctx.fillStyle = '#f5c842';
+    var dash = 80, doff = scroll % dash;
+    for (var l = 1; l < LANES; l++) {
+      var lx = ROAD_L + LANE_W * l - 2;
+      for (var dy = -dash + doff; dy < H; dy += dash) ctx.fillRect(lx, dy, 4, 40);
+    }
+    // árvores
+    for (var i = 0; i < scenery.length; i++) {
+      var s = scenery[i];
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.beginPath(); ctx.arc(s.x + 3, s.y + 4, s.r, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = s.tone < 0.5 ? '#2a5e2a' : '#336b30';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.beginPath(); ctx.arc(s.x - s.r * 0.3, s.y - s.r * 0.3, s.r * 0.5, 0, 6.2832); ctx.fill();
+    }
+  }
+
+  function draw() {
+    ctx.save();
+    if (shake > 0) ctx.translate((Math.random() - 0.5) * 12 * shake, (Math.random() - 0.5) * 12 * shake);
+    drawScene();
+    for (var i = 0; i < trucks.length; i++) {
+      var o = trucks[i];
+      drawTruck(o.x, o.y, o.w, o.h, o.color, false, 0);
+    }
+    if (state !== 'over') {
+      drawTruck(player.x, player.y, player.w, player.h, '#ff5a36', true, state === 'crash' ? 0.2 : player.vx / 290 * 0.1);
+    }
+    for (var j = 0; j < particles.length; j++) {
+      var p = particles[j];
+      ctx.globalAlpha = Math.max(0, p.life * 1.6);
+      ctx.fillStyle = p.c;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    if (state === 'crash' || state === 'over') {
+      ctx.fillStyle = 'rgba(255,60,30,' + (state === 'crash' ? 0.12 : 0) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  /* ---------- loop ---------- */
+  reset();
+  var last = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, (ts - last) / 1000 || 0);
+    last = ts;
+    update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
